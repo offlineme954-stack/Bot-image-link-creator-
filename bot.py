@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 # Config Credentials
 # IMPORTANT: Replace these values with your own credentials before deployment.
-BOT_TOKEN = "REPLACE_WITH_YOUR_BOT_TOKEN"
+BOT_TOKEN = "8649227717:AAEj9lgvTmu87PRP8gStEPkrx0ZZODbPifs"
 ADMIN_CHAT_ID = "8402780798"
 REQUIRED_CHANNEL = "@atiqul_services_bot"
 

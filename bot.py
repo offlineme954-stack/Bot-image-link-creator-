@@ -256,7 +256,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user.id not in CAPTCHA_SOLVED and str(user.id) != ADMIN_CHAT_ID:
         num1, num2, ans = generate_captcha(user.id)
         
-        # Make Inline Options
         options = [ans, ans + 1, ans - 1, ans + 2]
         random.shuffle(options)
         
@@ -351,7 +350,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         photo_file = await message.document.get_file()
         file_size_kb = round(message.document.file_size / 1024, 2) if message.document.file_size else 0
     else:
-        await message.reply_text("❌ <b>অনুগ্রহ করে একটি ছবি ফাইল পাঠাইন!</b>", parse_mode="HTML")
+        await message.reply_text("❌ <b>অনুগ্রহ করে একটি ছবি ফাইল পাঠান!</b>", parse_mode="HTML")
         return
 
     # Interactive Processing Animation
@@ -373,7 +372,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     file_bytes = await photo_file.download_as_bytearray()
     
-    # Send remaining animation step
     try:
         await status_msg.edit_text(animations[2], parse_mode="HTML")
     except Exception:
@@ -407,7 +405,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
-        # Auto-delete original image message from user
         try:
             await message.delete()
         except Exception:
@@ -455,7 +452,6 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             CAPTCHA_SOLVED.add(user_id)
             await query.answer("✅ আপনার উত্তর সঠিক হয়েছে! ধন্যবাদ।", show_alert=True)
             await query.message.delete()
-            # Redirect to start
             await start(update, context)
         else:
             await query.answer("❌ ভুল উত্তর! আবার চেষ্টা করুন।", show_alert=True)
@@ -510,8 +506,7 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("broadcast", broadcast_command))
-    app.add_handler(CallbackQueryHandler(button_click))
     app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, handle_photo))
+    app.add_handler(CallbackQueryHandler(button_click))
 
-    print("Bot is running...")
-    app.run_polling()
+    print("=== Direct

@@ -1,0 +1,432 @@
+import asyncio, html, logging, os, random, time
+from io import BytesIO
+from typing import Optional
+
+import aiohttp
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
+
+logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Put your NEW Telegram bot token in the hosting environment as BOT_TOKEN.
+BOT_TOKEN = os.getenv("BOT_TOKEN", "REPLACE_WITH_YOUR_BOT_TOKEN")
+ADMIN_CHAT_ID = "8402780798"
+
+USER_COOLDOWN = {}
+CAPTCHA_DATA = {}
+CAPTCHA_SOLVED = set()
+BOT_USERS = set()
+RECENT_UPLOADS = []
+TOTAL_UPLOADS = 0
+USER_LOCKS = {}
+
+
+def user_lock(user_id: int) -> asyncio.Lock:
+    if user_id not in USER_LOCKS:
+        USER_LOCKS[user_id] = asyncio.Lock()
+    return USER_LOCKS[user_id]
+
+
+# ---------------- IMAGE HOSTS ----------------
+# These do not require you to paste someone else's private API key.
+
+async def upload_catbox(s, b: bytes) -> Optional[str]:
+    try:
+        d = aiohttp.FormData()
+        d.add_field("reqtype", "fileupload")
+        d.add_field("fileToUpload", BytesIO(b), filename="image.jpg")
+        async with s.post("https://catbox.moe/user/api.php", data=d,
+                          timeout=aiohttp.ClientTimeout(total=12)) as r:
+            t = await r.text()
+            return t.strip() if r.status == 200 and t.strip().startswith("http") else None
+    except Exception:
+        return None
+
+
+async def upload_telegraph(s, b: bytes) -> Optional[str]:
+    try:
+        d = aiohttp.FormData()
+        d.add_field("file", BytesIO(b), filename="image.jpg", content_type="image/jpeg")
+        async with s.post("https://telegra.ph/upload", data=d,
+                          timeout=aiohttp.ClientTimeout(total=12)) as r:
+            if r.status == 200:
+                x = await r.json(content_type=None)
+                if isinstance(x, list) and x and x[0].get("src"):
+                    return "https://telegra.ph" + x[0]["src"]
+    except Exception:
+        pass
+    return None
+
+
+async def upload_tmpfiles(s, b: bytes) -> Optional[str]:
+    try:
+        d = aiohttp.FormData()
+        d.add_field("file", BytesIO(b), filename="image.jpg", content_type="image/jpeg")
+        async with s.post("https://tmpfiles.org/api/v1/upload", data=d,
+                          timeout=aiohttp.ClientTimeout(total=12)) as r:
+            if r.status == 200:
+                x = await r.json(content_type=None)
+                if x.get("status") == "success":
+                    return x["data"]["url"].replace("tmpfiles.org/", "tmpfiles.org/dl/")
+    except Exception:
+        pass
+    return None
+
+
+async def upload_litterbox(s, b: bytes) -> Optional[str]:
+    try:
+        d = aiohttp.FormData()
+        d.add_field("reqtype", "fileupload")
+        d.add_field("time", "24h")
+        d.add_field("fileToUpload", BytesIO(b), filename="image.jpg")
+        async with s.post("https://litterbox.catbox.moe/resources/internals/api.php",
+                          data=d, timeout=aiohttp.ClientTimeout(total=12)) as r:
+            t = await r.text()
+            return t.strip() if r.status == 200 and t.strip().startswith("http") else None
+    except Exception:
+        return None
+
+
+async def upload_0x0(s, b: bytes) -> Optional[str]:
+    try:
+        d = aiohttp.FormData()
+        d.add_field("file", BytesIO(b), filename="image.jpg", content_type="image/jpeg")
+        async with s.post("https://0x0.st", data=d,
+                          timeout=aiohttp.ClientTimeout(total=12)) as r:
+            t = await r.text()
+            return t.strip() if r.status == 200 and t.strip().startswith("http") else None
+    except Exception:
+        return None
+
+
+async def upload_multi(b: bytes) -> Optional[str]:
+    # All providers start together; first successful URL wins.
+    async with aiohttp.ClientSession(
+        timeout=aiohttp.ClientTimeout(total=15),
+        headers={"User-Agent": "AtikulImageBot/2.0"},
+    ) as s:
+        tasks = [
+            asyncio.create_task(upload_catbox(s, b)),
+            asyncio.create_task(upload_telegraph(s, b)),
+            asyncio.create_task(upload_tmpfiles(s, b)),
+            asyncio.create_task(upload_litterbox(s, b)),
+            asyncio.create_task(upload_0x0(s, b)),
+        ]
+        try:
+            for task in asyncio.as_completed(tasks):
+                try:
+                    result = await task
+                except Exception:
+                    result = None
+                if isinstance(result, str) and result.startswith("http"):
+                    return result
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+    return None
+
+
+# ---------------- CAPTCHA ----------------
+
+def new_captcha(user_id: int):
+    kind = random.choice(["add", "sub", "mul", "emoji"])
+
+    if kind == "add":
+        a, b = random.randint(2, 19), random.randint(2, 19)
+        answer, question = a + b, f"🔢 {a} + {b} = ?"
+    elif kind == "sub":
+        a = random.randint(10, 30)
+        b = random.randint(1, a - 1)
+        answer, question = a - b, f"➖ {a} − {b} = ?"
+    elif kind == "mul":
+        a, b = random.randint(2, 9), random.randint(2, 9)
+        answer, question = a * b, f"✖️ {a} × {b} = ?"
+    else:
+        e = random.choice(["🍎", "⭐", "🔵", "🍋", "🐟", "❤️", "🟢"])
+        n = random.randint(3, 8)
+        answer, question = n, " ".join([e] * n) + f"\n\n👀 উপরের {e} কয়টি আছে?"
+
+    CAPTCHA_DATA[user_id] = {"answer": answer, "time": time.time()}
+    opts = {answer}
+    while len(opts) < 4:
+        opts.add(max(0, answer + random.randint(-4, 4)))
+    opts = list(opts)
+    random.shuffle(opts)
+    keyboard = [[InlineKeyboardButton(str(x), callback_data=f"captcha|{x}") for x in opts]]
+    return question, InlineKeyboardMarkup(keyboard)
+
+
+# ---------------- START ----------------
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if not user or not update.message:
+        return
+
+    # Real Telegram bot accounts cannot use this bot.
+    if user.is_bot:
+        await update.message.reply_text("⛔ Telegram bot account ব্যবহার করা যাবে না।")
+        return
+
+    BOT_USERS.add(user.id)
+
+    # New /start = new challenge. No channel join is required.
+    if str(user.id) != ADMIN_CHAT_ID:
+        CAPTCHA_SOLVED.discard(user.id)
+        question, keyboard = new_captcha(user.id)
+        await update.message.reply_text(
+            "🛡️ <b>SECURITY CHECK</b>\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            "নিচের প্রশ্নের সঠিক উত্তরে ক্লিক করুন।\n\n"
+            f"<b>{question}</b>\n\n"
+            "🔐 প্রতিবার নতুন প্রশ্ন আসবে।",
+            parse_mode="HTML", reply_markup=keyboard)
+        return
+
+    await main_panel(update, user)
+
+
+async def main_panel(update: Update, user):
+    text = (
+        f"👑 <b>স্বাগতম, {html.escape(user.first_name)}</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "⚡ <b>ATIKUL ULTRA IMAGE CDN</b>\n\n"
+        "📸 ছবি পাঠান → একাধিক upload server একসাথে চেষ্টা করবে → "
+        "যে server আগে সফল হবে তার direct link পাবেন।\n\n"
+        "🚀 Fast • Multi-Server • Direct Link"
+    )
+    keys = [[InlineKeyboardButton("📘 ব্যবহার করার নিয়ম", callback_data="help")]]
+    if str(user.id) == ADMIN_CHAT_ID:
+        keys.append([InlineKeyboardButton("🛠️ Admin Panel", callback_data="admin")])
+    await update.message.reply_text(text, parse_mode="HTML",
+                                    reply_markup=InlineKeyboardMarkup(keys))
+
+
+# ---------------- PHOTO ----------------
+
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global TOTAL_UPLOADS
+    message = update.message
+    user = message.from_user if message else None
+    if not message or not user or user.is_bot:
+        return
+
+    uid = user.id
+    BOT_USERS.add(uid)
+
+    if str(uid) != ADMIN_CHAT_ID and uid not in CAPTCHA_SOLVED:
+        await message.reply_text("⚠️ আগে /start দিয়ে Human Verification সম্পন্ন করুন।")
+        return
+
+    now = time.time()
+    if now - USER_COOLDOWN.get(uid, 0) < 1.5:
+        await message.reply_text("⏳ একটু অপেক্ষা করে আবার ছবি পাঠান।")
+        return
+    USER_COOLDOWN[uid] = now
+
+    async with user_lock(uid):
+        status = await message.reply_text(
+            "╔══════════════════════╗\n"
+            "   🚀 <b>ATIKUL IMAGE ENGINE</b>\n"
+            "╚══════════════════════╝\n\n"
+            "🔍 ছবি গ্রহণ করা হচ্ছে...",
+            parse_mode="HTML")
+
+        if message.photo:
+            obj = message.photo[-1]
+            tg_file = await obj.get_file()
+            size = obj.file_size or 0
+        elif message.document and (message.document.mime_type or "").startswith("image/"):
+            tg_file = await message.document.get_file()
+            size = message.document.file_size or 0
+        else:
+            await status.edit_text("❌ শুধু ছবি পাঠান।")
+            return
+
+        steps = [
+            "🟦 <b>01 / 05</b> ▰▱▱▱▱  ছবি প্রস্তুত...",
+            "🟩 <b>02 / 05</b> ▰▰▱▱▱  Image engine চালু...",
+            "🟨 <b>03 / 05</b> ▰▰▰▱▱  একাধিক server-এ পাঠানো হচ্ছে...",
+            "🟧 <b>04 / 05</b> ▰▰▰▰▱  দ্রুততম response খোঁজা হচ্ছে...",
+        ]
+        for step in steps:
+            try:
+                await status.edit_text(
+                    "╔══════════════════════╗\n"
+                    "   ✨ <b>PROCESSING</b>\n"
+                    "╚══════════════════════╝\n\n" + step,
+                    parse_mode="HTML")
+            except Exception:
+                pass
+            await asyncio.sleep(0.22)
+
+        raw = await tg_file.download_as_bytearray()
+        await status.edit_text(
+            "🟪 <b>05 / 05</b> ▰▰▰▰▰\n\n"
+            "⚡ Direct link তৈরি হচ্ছে...",
+            parse_mode="HTML")
+
+        link = await upload_multi(bytes(raw))
+
+        if not link:
+            await status.edit_text(
+                "❌ <b>কোনো upload server এই মুহূর্তে সফল হয়নি।</b>\n"
+                "কিছুক্ষণ পরে আবার চেষ্টা করুন।", parse_mode="HTML")
+            return
+
+        TOTAL_UPLOADS += 1
+        RECENT_UPLOADS.insert(0, {
+            "user": f"@{user.username}" if user.username else user.first_name,
+            "user_id": uid, "link": link, "size_kb": round(size / 1024, 2)
+        })
+        del RECENT_UPLOADS[20:]
+
+        keys = [
+            [InlineKeyboardButton("🔗 লিঙ্ক কপি/দেখুন", callback_data=f"link|{link}")],
+            [InlineKeyboardButton("🌐 ব্রাউজারে ওপেন", url=link)],
+        ]
+        await status.edit_text(
+            "╔══════════════════════════╗\n"
+            "   🎉 <b>UPLOAD COMPLETE</b>\n"
+            "╚══════════════════════════╝\n\n"
+            "✅ Direct image link প্রস্তুত।\n\n"
+            f"🔗 <code>{html.escape(link)}</code>\n\n"
+            "⚡ প্রথম সফল server-এর link নেওয়া হয়েছে।",
+            parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keys))
+
+        # Successfully processed হলে original Telegram photo message মুছে ফেলার চেষ্টা।
+        try:
+            await message.delete()
+        except Exception:
+            pass
+
+
+# ---------------- BUTTONS ----------------
+
+async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    user = q.from_user
+    if user.is_bot:
+        await q.answer("⛔ Bot accounts are not supported.", show_alert=True)
+        return
+
+    parts = q.data.split("|", 1)
+    action = parts[0]
+
+    if action == "captcha":
+        try:
+            selected = int(parts[1])
+        except Exception:
+            await q.answer("❌ Invalid answer.", show_alert=True)
+            return
+
+        record = CAPTCHA_DATA.get(user.id)
+        if not record or time.time() - record["time"] > 120:
+            question, keyboard = new_captcha(user.id)
+            await q.answer("⏱️ পুরোনো CAPTCHA শেষ। নতুনটি দেওয়া হয়েছে।", show_alert=True)
+            await q.message.edit_text(
+                "🛡️ <b>নতুন Security Check</b>\n\n" + question,
+                parse_mode="HTML", reply_markup=keyboard)
+            return
+
+        if selected == record["answer"]:
+            CAPTCHA_SOLVED.add(user.id)
+            CAPTCHA_DATA.pop(user.id, None)
+            await q.answer("✅ Verification সফল!")
+            try:
+                await q.message.delete()
+            except Exception:
+                pass
+            await q.message.chat.send_message(
+                "✅ <b>Verification সম্পন্ন!</b>\n\n📸 এখন আপনার ছবি পাঠান।",
+                parse_mode="HTML")
+        else:
+            question, keyboard = new_captcha(user.id)
+            await q.answer("❌ ভুল! নতুন প্রশ্ন দেওয়া হয়েছে।", show_alert=True)
+            await q.message.edit_text(
+                "🛡️ <b>আবার চেষ্টা করুন</b>\n\n" + question,
+                parse_mode="HTML", reply_markup=keyboard)
+
+    elif action == "help":
+        await q.answer()
+        await q.message.reply_text(
+            "📘 <b>ব্যবহার:</b>\n\n"
+            "1️⃣ /start দিন\n"
+            "2️⃣ নতুন Security Check সম্পন্ন করুন\n"
+            "3️⃣ ছবি পাঠান\n"
+            "4️⃣ একাধিক upload server একসাথে কাজ করবে\n"
+            "5️⃣ প্রথম সফল direct link পাবেন\n\n"
+            "🗑️ সফল হলে মূল ছবির Telegram message মুছে ফেলার চেষ্টা হবে।",
+            parse_mode="HTML")
+
+    elif action == "link":
+        if len(parts) != 2:
+            await q.answer("❌ Link পাওয়া যায়নি।", show_alert=True)
+            return
+        await q.answer("✅ Link প্রস্তুত!")
+        await q.message.reply_text(
+            f"🔗 <b>Direct Image Link:</b>\n\n<code>{html.escape(parts[1])}</code>",
+            parse_mode="HTML")
+
+    elif action == "admin":
+        if str(user.id) != ADMIN_CHAT_ID:
+            await q.answer("❌ Admin only.", show_alert=True)
+            return
+        await q.answer()
+        await q.message.reply_text(
+            "🛠️ <b>ADMIN PANEL</b>\n"
+            f"👥 Users: <code>{len(BOT_USERS)}</code>\n"
+            f"📸 Uploads: <code>{TOTAL_UPLOADS}</code>\n\n"
+            "<code>/broadcast আপনার মেসেজ</code>",
+            parse_mode="HTML")
+
+
+# ---------------- BROADCAST ----------------
+
+async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.effective_user or str(update.effective_user.id) != ADMIN_CHAT_ID:
+        return
+    if not context.args:
+        await update.message.reply_text("ব্যবহার: /broadcast আপনার মেসেজ")
+        return
+    text = " ".join(context.args)
+    sent = 0
+    for uid in list(BOT_USERS):
+        try:
+            await context.bot.send_message(
+                uid, f"📢 <b>Admin Notice</b>\n\n{html.escape(text)}",
+                parse_mode="HTML")
+            sent += 1
+            await asyncio.sleep(0.05)
+        except Exception:
+            pass
+    await update.message.reply_text(f"✅ {sent} জনকে পাঠানো হয়েছে।")
+
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    logger.error("Unhandled exception", exc_info=context.error)
+
+
+def main():
+    if BOT_TOKEN == "REPLACE_WITH_YOUR_BOT_TOKEN":
+        raise RuntimeError("Hosting environment-এ BOT_TOKEN সেট করুন।")
+
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("broadcast", broadcast))
+    app.add_handler(CallbackQueryHandler(buttons))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    app.add_handler(MessageHandler(filters.Document.IMAGE, handle_photo))
+    app.add_error_handler(error_handler)
+
+    logger.info("Atikul Ultra Image Bot starting...")
+    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+
+
+if __name__ == "__main__":
+    main()

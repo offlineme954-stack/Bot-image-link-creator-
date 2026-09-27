@@ -1,521 +1,404 @@
-import asyncio, html, logging, os, random, time
+Import asyncio
+import logging
+import time
 from io import BytesIO
 from typing import Optional
 
 import aiohttp
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import (
+    ApplicationBuilder,
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
 
-logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
+# Logging Setup
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+)
 logger = logging.getLogger(__name__)
 
-# Configured Bot Token & Admin ID
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8649227717:AAEe4gOxmKnwOxd7J4earHlL1I241aiqz4w")
+# Config Credentials
+BOT_TOKEN = "8649227717:AAEe4gOxmKnwOxd7J4earHlL1I241aiqz4w"
 ADMIN_CHAT_ID = "8402780798"
+REQUIRED_CHANNEL = "@atiqul_services_bot"  # Force Subscribe Channel Username
 
-# Cooldown delay in seconds between uploads to prevent API spam/down
-UPLOAD_COOLDOWN = 10 
-
+# Memory Storage for Stats, Admin Logs & Anti-Spam
 USER_COOLDOWN = {}
-CAPTCHA_DATA = {}
-CAPTCHA_SOLVED = set()
-BOT_USERS = set()
-RECENT_UPLOADS = []
 TOTAL_UPLOADS = 0
-USER_LOCKS = {}
+RECENT_UPLOADS = []  # Admins can view uploaded photo logs here
 
 
-def user_lock(user_id: int) -> asyncio.Lock:
-    if user_id not in USER_LOCKS:
-        USER_LOCKS[user_id] = asyncio.Lock()
-    return USER_LOCKS[user_id]
+# ---------------- ASYNC HIGH-SPEED MULTI-API UPLOADER ---------------- #
 
+async def upload_image_multi_api(file_bytes: bytes) -> Optional[str]:
+    """Non-blocking Async Multi-API Uploader.
+    Supports concurrent users and handles API down failures smoothly.
+    """
+    async with aiohttp.ClientSession() as session:
 
-# ---------------- 10 PERMANENT & STABLE IMAGE APIS ----------------
-
-async def upload_catbox(s, b: bytes) -> Optional[str]:
-    try:
-        d = aiohttp.FormData()
-        d.add_field("reqtype", "fileupload")
-        d.add_field("fileToUpload", BytesIO(b), filename="image.jpg")
-        async with s.post("https://catbox.moe/user/api.php", data=d, timeout=aiohttp.ClientTimeout(total=15)) as r:
-            t = await r.text()
-            return t.strip() if r.status == 200 and t.strip().startswith("http") else None
-    except Exception:
-        return None
-
-
-async def upload_telegraph(s, b: bytes) -> Optional[str]:
-    try:
-        d = aiohttp.FormData()
-        d.add_field("file", BytesIO(b), filename="image.jpg", content_type="image/jpeg")
-        async with s.post("https://telegra.ph/upload", data=d, timeout=aiohttp.ClientTimeout(total=15)) as r:
-            if r.status == 200:
-                x = await r.json(content_type=None)
-                if isinstance(x, list) and x and x[0].get("src"):
-                    return "https://telegra.ph" + x[0]["src"]
-    except Exception:
-        pass
-    return None
-
-
-async def upload_0x0(s, b: bytes) -> Optional[str]:
-    try:
-        d = aiohttp.FormData()
-        d.add_field("file", BytesIO(b), filename="image.jpg", content_type="image/jpeg")
-        async with s.post("https://0x0.st", data=d, timeout=aiohttp.ClientTimeout(total=15)) as r:
-            t = await r.text()
-            return t.strip() if r.status == 200 and t.strip().startswith("http") else None
-    except Exception:
-        return None
-
-
-async def upload_freeimage(s, b: bytes) -> Optional[str]:
-    try:
-        d = aiohttp.FormData()
-        d.add_field("key", "6d207e02198a847aa98d0a2a901485a5")
-        d.add_field("action", "upload")
-        d.add_field("format", "json")
-        d.add_field("source", BytesIO(b), filename="image.jpg")
-        async with s.post("https://freeimage.host/api/1/upload", data=d, timeout=aiohttp.ClientTimeout(total=15)) as r:
-            if r.status == 200:
-                x = await r.json(content_type=None)
-                if "image" in x and "url" in x["image"]:
-                    return x["image"]["url"]
-    except Exception:
-        pass
-    return None
-
-
-async def upload_imgbb(s, b: bytes) -> Optional[str]:
-    try:
-        d = aiohttp.FormData()
-        d.add_field("key", "6d207e02198a847aa98d0a2a901485a5")
-        d.add_field("image", BytesIO(b), filename="image.jpg")
-        async with s.post("https://api.imgbb.com/1/upload", data=d, timeout=aiohttp.ClientTimeout(total=15)) as r:
-            if r.status == 200:
-                x = await r.json(content_type=None)
-                if "data" in x and "url" in x["data"]:
-                    return x["data"]["url"]
-    except Exception:
-        pass
-    return None
-
-
-async def upload_imghippo(s, b: bytes) -> Optional[str]:
-    try:
-        d = aiohttp.FormData()
-        d.add_field("api_key", "6d207e02198a847aa98d0a2a901485a5")
-        d.add_field("file", BytesIO(b), filename="image.jpg")
-        async with s.post("https://api.imghippo.com/v1/upload", data=d, timeout=aiohttp.ClientTimeout(total=15)) as r:
-            if r.status == 200:
-                x = await r.json(content_type=None)
-                if x.get("success") and "data" in x:
-                    return x["data"]["url"]
-    except Exception:
-        pass
-    return None
-
-
-async def upload_envs_sh(s, b: bytes) -> Optional[str]:
-    try:
-        d = aiohttp.FormData()
-        d.add_field("file", BytesIO(b), filename="image.jpg")
-        async with s.post("https://envs.sh", data=d, timeout=aiohttp.ClientTimeout(total=15)) as r:
-            t = await r.text()
-            return t.strip() if r.status == 200 and t.strip().startswith("http") else None
-    except Exception:
-        return None
-
-
-async def upload_pixeldrain(s, b: bytes) -> Optional[str]:
-    try:
-        d = aiohttp.FormData()
-        d.add_field("file", BytesIO(b), filename="image.jpg")
-        async with s.post("https://pixeldrain.com/api/file", data=d, timeout=aiohttp.ClientTimeout(total=15)) as r:
-            if r.status in [200, 201]:
-                x = await r.json(content_type=None)
-                if x.get("success"):
-                    return f"https://pixeldrain.com/api/file/{x['id']}"
-    except Exception:
-        pass
-    return None
-
-
-async def upload_postimages(s, b: bytes) -> Optional[str]:
-    try:
-        d = aiohttp.FormData()
-        d.add_field("optsize", "0")
-        d.add_field("file", BytesIO(b), filename="image.jpg")
-        async with s.post("https://postimages.org/json/rr", data=d, timeout=aiohttp.ClientTimeout(total=15)) as r:
-            if r.status == 200:
-                x = await r.json(content_type=None)
-                if "url" in x:
-                    return x["url"]
-    except Exception:
-        pass
-    return None
-
-
-async def upload_imgur(s, b: bytes) -> Optional[str]:
-    try:
-        headers = {"Authorization": "Client-ID 5442572f3e18930"}
-        d = aiohttp.FormData()
-        d.add_field("image", BytesIO(b), filename="image.jpg")
-        async with s.post("https://api.imgur.com/3/image", data=d, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as r:
-            if r.status == 200:
-                x = await r.json(content_type=None)
-                if x.get("success") and "data" in x:
-                    return x["data"]["link"]
-    except Exception:
-        pass
-    return None
-
-
-async def upload_multi(b: bytes) -> Optional[str]:
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-    }
-    
-    async with aiohttp.ClientSession(
-        timeout=aiohttp.ClientTimeout(total=20),
-        headers=headers,
-    ) as s:
-        tasks = [
-            asyncio.create_task(upload_catbox(s, b)),
-            asyncio.create_task(upload_telegraph(s, b)),
-            asyncio.create_task(upload_freeimage(s, b)),
-            asyncio.create_task(upload_imgbb(s, b)),
-            asyncio.create_task(upload_imghippo(s, b)),
-            asyncio.create_task(upload_0x0(s, b)),
-            asyncio.create_task(upload_envs_sh(s, b)),
-            asyncio.create_task(upload_pixeldrain(s, b)),
-            asyncio.create_task(upload_postimages(s, b)),
-            asyncio.create_task(upload_imgur(s, b)),
-        ]
-        
+        # 1. API: Catbox.moe
         try:
-            for task in asyncio.as_completed(tasks):
-                try:
-                    result = await task
-                    if isinstance(result, str) and result.startswith("http"):
-                        for t in tasks:
-                            if not t.done():
-                                t.cancel()
-                        return result
-                except Exception:
-                    continue
-        finally:
-            for task in tasks:
-                if not task.done():
-                    task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
-            
+            data = aiohttp.FormData()
+            data.add_field("reqtype", "fileupload")
+            data.add_field("fileToUpload", BytesIO(file_bytes), filename="image.jpg")
+            async with session.post("https://catbox.moe/user/api.php", data=data, timeout=8) as res:
+                text = await res.text()
+                if res.status == 200 and text.startswith("http"):
+                    return text.strip()
+        except Exception as e:
+            logger.error(f"Catbox API failed: {e}")
+
+        # 2. API: FreeImage.host
+        try:
+            data = aiohttp.FormData()
+            data.add_field("key", "6d207e02198a847aa98d0a2a901485a5")
+            data.add_field("action", "upload")
+            data.add_field("format", "json")
+            data.add_field("source", BytesIO(file_bytes), filename="image.jpg")
+            async with session.post("https://freeimage.host/api/1/upload", data=data, timeout=8) as res:
+                if res.status == 200:
+                    json_data = await res.json()
+                    if "image" in json_data and "url" in json_data["image"]:
+                        return json_data["image"]["url"]
+        except Exception as e:
+            logger.error(f"FreeImage API failed: {e}")
+
+        # 3. API: ImgBB API
+        try:
+            data = aiohttp.FormData()
+            data.add_field("key", "6d207e02198a847aa98d0a2a901485a5")
+            data.add_field("image", BytesIO(file_bytes), filename="image.jpg")
+            async with session.post("https://api.imgbb.com/1/upload", data=data, timeout=8) as res:
+                if res.status == 200:
+                    json_data = await res.json()
+                    if "data" in json_data and "url" in json_data["data"]:
+                        return json_data["data"]["url"]
+        except Exception as e:
+            logger.error(f"ImgBB API failed: {e}")
+
+        # 4. API: TmpFiles.org
+        try:
+            data = aiohttp.FormData()
+            data.add_field("file", BytesIO(file_bytes), filename="image.jpg")
+            async with session.post("https://tmpfiles.org/api/v1/upload", data=data, timeout=8) as res:
+                if res.status == 200:
+                    json_data = await res.json()
+                    if "data" in json_data and "url" in json_data["data"]:
+                        url = json_data["data"]["url"]
+                        return url.replace("tmpfiles.org/", "tmpfiles.org/dl/")
+        except Exception as e:
+            logger.error(f"TmpFiles API failed: {e}")
+
+        # 5. API: ImgHippo API
+        try:
+            data = aiohttp.FormData()
+            data.add_field("api_key", "6d207e02198a847aa98d0a2a901485a5")
+            data.add_field("file", BytesIO(file_bytes), filename="image.jpg")
+            async with session.post("https://api.imghippo.com/v1/upload", data=data, timeout=8) as res:
+                if res.status == 200:
+                    json_data = await res.json()
+                    if json_data.get("success") and "data" in json_data:
+                        return json_data["data"]["url"]
+        except Exception as e:
+            logger.error(f"ImgHippo API failed: {e}")
+
+        # 6. API: Litterbox (Backup Storage)
+        try:
+            data = aiohttp.FormData()
+            data.add_field("reqtype", "fileupload")
+            data.add_field("time", "1h")
+            data.add_field("fileToUpload", BytesIO(file_bytes), filename="image.jpg")
+            async with session.post("https://litterbox.catbox.moe/resources/internals/api.php", data=data, timeout=8) as res:
+                text = await res.text()
+                if res.status == 200 and text.startswith("http"):
+                    return text.strip()
+        except Exception as e:
+            logger.error(f"Litterbox API failed: {e}")
+
+        # 7. API: File.io
+        try:
+            data = aiohttp.FormData()
+            data.add_field("file", BytesIO(file_bytes), filename="image.jpg")
+            async with session.post("https://file.io", data=data, timeout=8) as res:
+                if res.status == 200:
+                    json_data = await res.json()
+                    if json_data.get("success"):
+                        return json_data.get("link")
+        except Exception as e:
+            logger.error(f"File.io API failed: {e}")
+
     return None
 
+async def shorten_url(long_url: str) -> str:
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"https://tinyurl.com/api-create.php?url={long_url}", timeout=5) as res:
+                if res.status == 200:
+                    text = await res.text()
+                    return text.strip()
+    except Exception as e:
+        logger.error(f"Shortener failed: {e}")
+    return long_url
 
-# ---------------- CAPTCHA ----------------
-
-def new_captcha(user_id: int):
-    kind = random.choice(["add", "sub", "mul", "emoji"])
-
-    if kind == "add":
-        a, b = random.randint(2, 19), random.randint(2, 19)
-        answer, question = a + b, f"🔢 {a} + {b} = ?"
-    elif kind == "sub":
-        a = random.randint(10, 30)
-        b = random.randint(1, a - 1)
-        answer, question = a - b, f"➖ {a} − {b} = ?"
-    elif kind == "mul":
-        a, b = random.randint(2, 9), random.randint(2, 9)
-        answer, question = a * b, f"✖️ {a} × {b} = ?"
-    else:
-        e = random.choice(["🍎", "⭐", "🔵", "🍋", "🐟", "❤️", "🟢"])
-        n = random.randint(3, 8)
-        answer, question = n, " ".join([e] * n) + f"\n\n👀 উপরের {e} কয়টি আছে?"
-
-    CAPTCHA_DATA[user_id] = {"answer": answer, "time": time.time()}
-    opts = {answer}
-    while len(opts) < 4:
-        opts.add(max(0, answer + random.randint(-4, 4)))
-    opts = list(opts)
-    random.shuffle(opts)
-    keyboard = [[InlineKeyboardButton(str(x), callback_data=f"captcha|{x}") for x in opts]]
-    return question, InlineKeyboardMarkup(keyboard)
+# Helper function to check channel subscription
+async def check_subscription(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    try:
+        member = await context.bot.get_chat_member(chat_id=REQUIRED_CHANNEL, user_id=user_id)
+        if member.status in ["creator", "administrator", "member"]:
+            return True
+    except Exception as e:
+        logger.error(f"Sub check error: {e}")
+        return True  # Allow if channel permissions fail
+    return False
 
 
-# ---------------- START ----------------
+# ---------------- COMMAND HANDLERS ---------------- #
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    if not user or not update.message:
-        return
 
-    if user.is_bot:
-        await update.message.reply_text("⛔ Telegram bot account ব্যবহার করা যাবে না।")
-        return
-
-    BOT_USERS.add(user.id)
-
-    if str(user.id) != ADMIN_CHAT_ID:
-        CAPTCHA_SOLVED.discard(user.id)
-        question, keyboard = new_captcha(user.id)
+    # Force Sub Check
+    is_subbed = await check_subscription(user.id, context)
+    if not is_subbed:
+        keyboard = [
+            [InlineKeyboardButton("📢 Join Channel", url=f"https://t.me/{REQUIRED_CHANNEL.replace('@', '')}")],
+            [InlineKeyboardButton("✅ Joined / Verify", callback_data="check_sub_again")]
+        ]
         await update.message.reply_text(
-            "🛡️ <b>SECURITY CHECK</b>\n"
-            "━━━━━━━━━━━━━━━━━━\n"
-            "নিচের প্রশ্নের সঠিক উত্তরে ক্লিক করুন।\n\n"
-            f"<b>{question}</b>\n\n"
-            "🔐 প্রতিবার নতুন প্রশ্ন আসবে।",
-            parse_mode="HTML", reply_markup=keyboard)
-        return
-
-    await main_panel(update, user)
-
-
-async def main_panel(update: Update, user):
-    text = (
-        f"👑 <b>স্বাগতম, {html.escape(user.first_name)}</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        "⚡ <b>ATIKUL ULTRA IMAGE CDN</b>\n\n"
-        "📸 ছবি পাঠান → ১০টি স্থায়ী এপিআই দিয়ে direct link পাবেন।\n\n"
-        "🚀 Fast • Multi-Server • Permanent Direct Link"
-    )
-    keys = [[InlineKeyboardButton("📘 ব্যবহার করার নিয়ম", callback_data="help")]]
-    if str(user.id) == ADMIN_CHAT_ID:
-        keys.append([InlineKeyboardButton("🛠️ Admin Panel", callback_data="admin")])
-    await update.message.reply_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keys))
-
-
-# ---------------- PHOTO HANDLE WITH TIMING ----------------
-
-async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global TOTAL_UPLOADS
-    message = update.message
-    user = message.from_user if message else None
-    if not message or not user or user.is_bot:
-        return
-
-    uid = user.id
-    BOT_USERS.add(uid)
-
-    if str(uid) != ADMIN_CHAT_ID and uid not in CAPTCHA_SOLVED:
-        await message.reply_text("⚠️ আগে /start দিয়ে Human Verification সম্পন্ন করুন।")
-        return
-
-    # ⏳ COOLDOWN CHECKING (টাইমিং কাউন্টডাউন)
-    now = time.time()
-    last_upload = USER_COOLDOWN.get(uid, 0)
-    time_passed = now - last_upload
-
-    if time_passed < UPLOAD_COOLDOWN:
-        remaining = int(UPLOAD_COOLDOWN - time_passed)
-        await message.reply_text(
-            f"⏳ <b>অনুগ্রহ করে একটু অপেক্ষা করুন!</b>\n"
-            f"এপিআই ডাউন বা ব্লক হওয়া রোধ করতে টাইমার চালু আছে।\n\n"
-            f"⏱️ আর <b>{remaining} সেকেন্ড</b> পর আবার ছবি আপলোড করতে পারবেন।",
-            parse_mode="HTML"
+            f"⚠️ <b>বটটি ব্যবহার করতে আপনাকে অবশ্যই আমাদের চ্যানেলে জয়েন করতে হবে!</b>\n\n"
+            f"নিচের বাটনে ক্লিক করে <b>{REQUIRED_CHANNEL}</b> এ জয়েন করুন এবং 'Joined / Verify' বাটনে চাপ দিন।",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
         return
 
-    # Lock and update time
-    async with user_lock(uid):
-        USER_COOLDOWN[uid] = time.time()
+    welcome_text = (
+        f"✨ <b>আসসালামু আলাইকুম, {user.first_name}!</b> ✨\n\n"
+        "👑 <b>Atikul Image To Link Pro Bot</b>-এ আপনাকে স্বাগতম!\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "📸 <b>আপনার ছবিটি পাঠাই দিন:</b>\n"
+        "যেকোনো ছবি সেন্ড করলেই একাধিক হাই-স্পিড সার্ভার দিয়ে সাথে সাথে লিংক তৈরি হয়ে যাবে।\n\n"
+        "🚀 <b>প্রিমিয়াম ফিচারসমূহ:</b>\n"
+        "├ ⚡ Fast Multi-Server Backup System\n"
+        "├ 🗑️ Auto-Delete Uploaded Image\n"
+        "├ 🔗 Short URL Generator (TinyURL)\n"
+        "├ ✨ AI Image HD Upscale Tool\n"
+        "├ 🎨 One-Click Background Remover\n"
+        "└ 📱 Auto QR Code Generator\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "👇 <i>শুরু করতে ছবি আপলোড করুন!</i>"
+    )
 
-        status = await message.reply_text(
-            "╔══════════════════════╗\n"
-            "   🚀 <b>ATIKUL IMAGE ENGINE</b>\n"
-            "╚══════════════════════╝\n\n"
-            "🔍 ছবি গ্রহণ করা হচ্ছে...",
-            parse_mode="HTML")
-
-        if message.photo:
-            obj = message.photo[-1]
-            tg_file = await obj.get_file()
-            size = obj.file_size or 0
-        elif message.document and (message.document.mime_type or "").startswith("image/"):
-            tg_file = await message.document.get_file()
-            size = message.document.file_size or 0
-        else:
-            await status.edit_text("❌ শুধু ছবি পাঠান।")
-            return
-
-        steps = [
-            "🟦 <b>01 / 05</b> ▰▱▱▱▱  ছবি প্রস্তুত...",
-            "🟩 <b>02 / 05</b> ▰▰▱▱▱  Image engine চালু...",
-            "🟨 <b>03 / 05</b> ▰▰▰▱▱  স্থায়ী এপিআই-তে পাঠানো হচ্ছে...",
-            "🟧 <b>04 / 05</b> ▰▰▰▰▱  দ্রুততম response খোঁজা হচ্ছে...",
+    keyboard = [
+        [InlineKeyboardButton("📤 Upload Instructions", callback_data="btn_upload_instruction")],
+        [
+            InlineKeyboardButton("📢 Developer Channel", url=f"https://t.me/{REQUIRED_CHANNEL.replace('@', '')}"),
+            InlineKeyboardButton("👨‍💻 Admin Contact", url=f"tg://user?id={ADMIN_CHAT_ID}")
         ]
-        for step in steps:
-            try:
-                await status.edit_text(
-                    "╔══════════════════════╗\n"
-                    "   ✨ <b>PROCESSING</b>\n"
-                    "╚══════════════════════╝\n\n" + step,
-                    parse_mode="HTML")
-            except Exception:
-                pass
-            await asyncio.sleep(0.18)
+    ]
 
-        raw = await tg_file.download_as_bytearray()
-        await status.edit_text(
-            "🟪 <b>05 / 05</b> ▰▰▰▰▰\n\n"
-            "⚡ Permanent link তৈরি হচ্ছে...",
-            parse_mode="HTML")
+    # If the user is the ADMIN, add the Admin Panel button under the keyboard
+    if str(user.id) == ADMIN_CHAT_ID:
+        keyboard.append([InlineKeyboardButton("🛠️ Admin Panel (আপলোড করা ছবিগুলো দেখুন)", callback_data="open_admin_panel")])
 
-        link = await upload_multi(bytes(raw))
+    await update.message.reply_text(
+        welcome_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
-        if not link:
-            await status.edit_text(
-                "❌ <b>কোনো upload server এই মুহূর্তে সফল হয়নি।</b>\n"
-                "কিছুক্ষণ পরে আবার চেষ্টা করুন।", parse_mode="HTML")
-            return
-
-        TOTAL_UPLOADS += 1
-        RECENT_UPLOADS.insert(0, {
-            "user": f"@{user.username}" if user.username else user.first_name,
-            "user_id": uid, "link": link, "size_kb": round(size / 1024, 2)
-        })
-        del RECENT_UPLOADS[20:]
-
-        keys = [
-            [InlineKeyboardButton("🔗 লিঙ্ক কপি/দেখুন", callback_data=f"link|{link}")],
-            [InlineKeyboardButton("🌐 ব্রাউজারে ওপেন", url=link)],
-        ]
-        await status.edit_text(
-            "╔══════════════════════════╗\n"
-            "   🎉 <b>UPLOAD COMPLETE</b>\n"
-            "╚══════════════════════════╝\n\n"
-            "✅ Permanent Direct Image Link প্রস্তুত।\n\n"
-            f"🔗 <code>{html.escape(link)}</code>\n\n"
-            f"⏱️ <i>পরবর্তী আপলোড {UPLOAD_COOLDOWN} সেকেন্ড পর করতে পারবেন।</i>",
-            parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keys))
-
-        try:
-            await message.delete()
-        except Exception:
-            pass
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if str(update.effective_user.id) == ADMIN_CHAT_ID:
+        await update.message.reply_text(f"📊 <b>Total Uploads Processed:</b> <code>{TOTAL_UPLOADS}</code>", parse_mode="HTML")
 
 
-# ---------------- BUTTONS ----------------
+# ---------------- PHOTO PROCESSING ---------------- #
 
-async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    if not q:
-        return
-    user = q.from_user
-    if user.is_bot:
-        await q.answer("⛔ Bot accounts are not supported.", show_alert=True)
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global TOTAL_UPLOADS, RECENT_UPLOADS
+    message = update.message
+    user_id = message.from_user.id
+
+    # Force Sub Check
+    is_subbed = await check_subscription(user_id, context)
+    if not is_subbed:
+        await message.reply_text("⚠️ <b>অনুগ্রহ করে আগে আমাদের চ্যানেলে জয়েন করুন!</b>\nকমান্ড: /start", parse_mode="HTML")
         return
 
-    parts = q.data.split("|", 1)
-    action = parts[0]
+    # Anti-Spam Rate Limit (3 seconds cooldown)
+    current_time = time.time()
+    if user_id in USER_COOLDOWN and current_time - USER_COOLDOWN[user_id] < 3:
+        await message.reply_text("⚠️ <b>স্প্যাম রোধে প্রতি ৩ সেকেন্ড পর পর ছবি পাঠান!</b>", parse_mode="HTML")
+        return
+    USER_COOLDOWN[user_id] = current_time
 
-    if action == "captcha":
-        try:
-            selected = int(parts[1])
-        except Exception:
-            await q.answer("❌ Invalid answer.", show_alert=True)
-            return
+    photo_file = None
+    file_size_kb = 0
 
-        record = CAPTCHA_DATA.get(user.id)
-        if not record or time.time() - record["time"] > 120:
-            question, keyboard = new_captcha(user.id)
-            await q.answer("⏱️ পুরোনো CAPTCHA শেষ। নতুনটি দেওয়া হয়েছে।", show_alert=True)
-            await q.message.edit_text(
-                "🛡️ <b>নতুন Security Check</b>\n\n" + question,
-                parse_mode="HTML", reply_markup=keyboard)
-            return
+    if message.photo:
+        photo_obj = message.photo[-1]
+        photo_file = await photo_obj.get_file()
+        file_size_kb = round(photo_obj.file_size / 1024, 2) if photo_obj.file_size else 0
+    elif message.document and message.document.mime_type and message.document.mime_type.startswith("image/"):
+        photo_file = await message.document.get_file()
+        file_size_kb = round(message.document.file_size / 1024, 2) if message.document.file_size else 0
+    else:
+        await message.reply_text("❌ <b>অনুগ্রহ করে একটি বৈধ ছবি পাঠাইন!</b>", parse_mode="HTML")
+        return
 
-        if selected == record["answer"]:
-            CAPTCHA_SOLVED.add(user.id)
-            CAPTCHA_DATA.pop(user.id, None)
-            await q.answer("✅ Verification সফল!")
+    status_msg = await message.reply_text("⚡ <b>Multi-API দিয়ে ছবি প্রসেসিং হচ্ছে...</b>", parse_mode="HTML")
+
+    try:
+        file_bytes = await photo_file.download_as_bytearray()
+        direct_link = await upload_image_multi_api(file_bytes)
+
+        if direct_link:
+            TOTAL_UPLOADS += 1
+
+            # Save in Admin History Log (keeps last 30 uploads)
+            user_info = f"@{message.from_user.username}" if message.from_user.username else message.from_user.first_name
+            RECENT_UPLOADS.insert(0, {
+                "user": user_info,
+                "user_id": user_id,
+                "link": direct_link,
+                "size": file_size_kb
+            })
+            if len(RECENT_UPLOADS) > 30:
+                RECENT_UPLOADS.pop()
+
+            keyboard = [
+                [InlineKeyboardButton("🔗 ছবির লিংক নিন (Direct Link)", callback_data=f"get_link|{direct_link}")],
+                [
+                    InlineKeyboardButton("✂️ Short Link", callback_data=f"short_link|{direct_link}"),
+                    InlineKeyboardButton("ℹ️ Info", callback_data=f"img_info|{file_size_kb}")
+                ],
+                [
+                    InlineKeyboardButton("✨ AI HD Enhancer", callback_data=f"ai_hd|{direct_link}"),
+                    InlineKeyboardButton("🎨 BG Remover", callback_data=f"bg_rem|{direct_link}")
+                ],
+                [InlineKeyboardButton("📱 QR Code তৈরি করুন", callback_data=f"make_qr|{direct_link}")],
+                [InlineKeyboardButton("🌐 ব্রাউজারে অপেন করুন", url=direct_link)]
+            ]
+
+            await status_msg.edit_text(
+                "🎉 <b>আপনার ছবির ডাইরেক্ট লিংক প্রস্তুত!</b>\n"
+                "✨ (মূল ছবিটি সফলভাবে মুছে ফেলা হয়েছে)\n\n"
+                "👇 <b>বাটন থেকে আপনার সেবা নির্বাচন করুন:</b>",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+
+            # Auto-delete user photo
             try:
-                await q.message.delete()
-            except Exception:
-                pass
-            await q.message.chat.send_message(
-                "✅ <b>Verification সম্পন্ন!</b>\n\n📸 এখন আপনার ছবি পাঠান।",
-                parse_mode="HTML")
+                await message.delete()
+            except Exception as del_err:
+                logger.error(f"Failed to delete original photo: {del_err}")
+
+            # Notify Admin
+            try:
+                admin_text = (
+                    "🔔 <b>নতুন ছবি আপলোড হয়েছে!</b>\n\n"
+                    f"👤 <b>ইউজার:</b> {user_info} (<code>{message.from_user.id}</code>)\n"
+                    f"🔗 <b>লিংক:</b> {direct_link}"
+                )
+                await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=admin_text, parse_mode="HTML")
+            except Exception as admin_err:
+                logger.error(f"Admin notification failed: {admin_err}")
+
         else:
-            question, keyboard = new_captcha(user.id)
-            await q.answer("❌ ভুল! নতুন প্রশ্ন দেওয়া হয়েছে।", show_alert=True)
-            await q.message.edit_text(
-                "🛡️ <b>আবার চেষ্টা করুন</b>\n\n" + question,
-                parse_mode="HTML", reply_markup=keyboard)
+            await status_msg.edit_text("❌ <b>সবগুলো সার্ভার চেষ্টা করা হয়েছে, কিন্তু আপলোড ব্যর্থ হয়েছে। আবার চেষ্টা করুন!</b>", parse_mode="HTML")
 
-    elif action == "help":
-        await q.answer()
-        await q.message.reply_text(
-            "📘 <b>ব্যবহার বিধি:</b>\n\n"
-            "1️⃣ /start দিন\n"
-            "2️⃣ Security Check সম্পন্ন করুন\n"
-            "3️⃣ ছবি পাঠান\n"
-            "4️⃣ ১০টি স্থায়ী এপিআই থেকে সরাসরি ডিরেক্ট লিঙ্ক পাবেন\n"
-            "5️⃣ প্রতিবার আপলোডের পর ১০ সেকেন্ড টাইমার থাকবে।",
-            parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"Processing error: {e}")
+        await status_msg.edit_text("⚠️ <b>সার্ভারে সমস্যা হয়েছে! অনুগ্রহ করে আবার চেষ্টা করুন।</b>", parse_mode="HTML")
 
-    elif action == "link":
-        if len(parts) != 2:
-            await q.answer("❌ Link পাওয়া যায়নি।", show_alert=True)
+
+# ---------------- BUTTON CALLBACK HANDLER ---------------- #
+
+async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    data = query.data.split("|")
+    action = data[0]
+    link = data[1] if len(data) > 1 else ""
+
+    if action == "check_sub_again":
+        is_subbed = await check_subscription(query.from_user.id, context)
+        if is_subbed:
+            await query.answer("✅ ভেরিফিকেশন সফল!", show_alert=True)
+            await query.message.edit_text("🎉 <b>স্বাগতম!</b> আপনি সফলভাবে চ্যানেলে জয়েন করেছেন। এখন আমাকে যেকোনো ছবি পাঠাই দিন!", parse_mode="HTML")
+        else:
+            await query.answer("❌ আপনি এখনো জয়েন করেননি!", show_alert=True)
+
+    elif action == "btn_upload_instruction":
+        await query.answer()
+        await query.message.reply_text(
+            "📸 <b>ছবি আপলোড করার নিয়ম:</b>\n\nগ্যালারি থেকে আপনার যেকোনো Image বা Document ফাইল সরাসরি এই চ্যাটে সেন্ড করুন।",
+            parse_mode="HTML"
+        )
+
+    elif action == "open_admin_panel":
+        if str(query.from_user.id) != ADMIN_CHAT_ID:
+            await query.answer("❌ আপনি অ্যাডমিন নন!", show_alert=True)
             return
-        await q.answer("✅ Link প্রস্তুত!")
-        await q.message.reply_text(
-            f"🔗 <b>Direct Image Link:</b>\n\n<code>{html.escape(parts[1])}</code>",
-            parse_mode="HTML")
 
-    elif action == "admin":
-        if str(user.id) != ADMIN_CHAT_ID:
-            await q.answer("❌ Admin only.", show_alert=True)
+        await query.answer("🛠️ অ্যাডমিন প্যানেল লোড হচ্ছে...")
+
+        if not RECENT_UPLOADS:
+            await query.message.reply_text("📂 <b>এখনো কোনো ছবি আপলোড করা হয়নি!</b>", parse_mode="HTML")
             return
-        await q.answer()
-        await q.message.reply_text(
-            "🛠️ <b>ADMIN PANEL</b>\n"
-            f"👥 Total Users: <code>{len(BOT_USERS)}</code>\n"
-            f"📸 Total Uploads: <code>{TOTAL_UPLOADS}</code>\n\n"
-            "<code>/broadcast আপনার মেসেজ</code>",
-            parse_mode="HTML")
+
+        log_text = f"🛠️ <b>অ্যাডমিন প্যানেল (সর্বশেষ {len(RECENT_UPLOADS)} টি ছবি):</b>\n"
+        log_text += f"📊 <b>সর্বমোট আপলোড:</b> <code>{TOTAL_UPLOADS}</code> টি\n━━━━━━━━━━━━━━━━━━━━\n\n"
+
+        for idx, item in enumerate(RECENT_UPLOADS[:15], 1):
+            log_text += (
+                f"<b>{idx}. ইউজার:</b> {item['user']} (<code>{item['user_id']}</code>)\n"
+                f"   📦 <b>সাইজ:</b> {item['size']} KB\n"
+                f"   🔗 <b>লিংক:</b> {item['link']}\n\n"
+            )
+
+        await query.message.reply_text(log_text, parse_mode="HTML", disable_web_page_preview=True)
+
+    elif action == "get_link":
+        await query.answer("✅ লিংক প্রস্তুত!", show_alert=False)
+        await query.message.reply_text(f"💎 <b>আপনার ডাইরেক্ট লিংক:</b>\n\n<code>{link}</code>", parse_mode="HTML")
+
+    elif action == "short_link":
+        await query.answer("✂️ শর্ট লিংক তৈরি হচ্ছে...", show_alert=False)
+        s_url = await shorten_url(link)
+        await query.message.reply_text(f"✂️ <b>আপনার শর্ট লিংক:</b>\n\n<code>{s_url}</code>", parse_mode="HTML")
+
+    elif action == "img_info":
+        await query.answer(f"📦 ফাইল সাইজ: {link} KB", show_alert=True)
+
+    elif action == "ai_hd":
+        await query.answer("✨ AI HD Enhancer লোড হচ্ছে...", show_alert=False)
+        await query.message.reply_text(f"✨ <b>AI HD Image Enhancer:</b>\n🔗 https://upscalepic.com/?ref_img={link}", parse_mode="HTML")
+
+    elif action == "bg_rem":
+        await query.answer("🎨 BG Remover লোড হচ্ছে...", show_alert=False)
+        await query.message.reply_text("🎨 <b>Background Remover:</b>\n🔗 https://www.remove.bg/upload", parse_mode="HTML")
+
+    elif action == "make_qr":
+        await query.answer("📱 QR Code তৈরি হচ্ছে...", show_alert=False)
+        qr_api_url = f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data={link}"
+        await query.message.reply_photo(photo=qr_api_url, caption=f"📱 <b>QR Code:</b>\n<code>{link}</code>", parse_mode="HTML")
 
 
-# ---------------- BROADCAST ----------------
-
-async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.effective_user or str(update.effective_user.id) != ADMIN_CHAT_ID:
-        return
-    if not context.args:
-        await update.message.reply_text("ব্যবহার: /broadcast আপনার মেসেজ")
-        return
-    text = " ".join(context.args)
-    sent = 0
-    for uid in list(BOT_USERS):
-        try:
-            await context.bot.send_message(
-                uid, f"📢 <b>Admin Notice</b>\n\n{html.escape(text)}",
-                parse_mode="HTML")
-            sent += 1
-            await asyncio.sleep(0.05)
-        except Exception:
-            pass
-    await update.message.reply_text(f"✅ {sent} জনকে পাঠানো হয়েছে।")
-
-
-async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
-    logger.error("Unhandled exception", exc_info=context.error)
-
+# ---------------- MAIN APPLICATION ---------------- #
 
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
+
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("broadcast", broadcast))
-    app.add_handler(CallbackQueryHandler(buttons))
-    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    app.add_handler(MessageHandler(filters.Document.IMAGE, handle_photo))
-    app.add_error_handler(error_handler)
+    app.add_handler(CommandHandler("stats", stats_command))
+    app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, handle_photo))
+    app.add_handler(CallbackQueryHandler(button_click))
 
-    logger.info("Atikul Ultra Image Bot starting...")
-    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
-
+    print("=== Supercharged Image To Link Bot running ===")
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
-            

@@ -10,7 +10,7 @@ logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s
 logger = logging.getLogger(__name__)
 
 # Put your NEW Telegram bot token in the hosting environment as BOT_TOKEN.
-BOT_TOKEN ="8649227717:AAEe4gOxmKnwOxd7J4earHlL1I241aiqz4w"
+BOT_TOKEN = os.getenv("BOT_TOKEN", "REPLACE_WITH_YOUR_BOT_TOKEN")
 ADMIN_CHAT_ID = "8402780798"
 
 USER_COOLDOWN = {}
@@ -28,8 +28,7 @@ def user_lock(user_id: int) -> asyncio.Lock:
     return USER_LOCKS[user_id]
 
 
-# ---------------- IMAGE HOSTS ----------------
-# These do not require you to paste someone else's private API key.
+# ---------------- 10 POWERFUL IMAGE HOSTING APIS ----------------
 
 async def upload_catbox(s, b: bytes) -> Optional[str]:
     try:
@@ -100,6 +99,83 @@ async def upload_0x0(s, b: bytes) -> Optional[str]:
         return None
 
 
+async def upload_freeimage(s, b: bytes) -> Optional[str]:
+    try:
+        d = aiohttp.FormData()
+        d.add_field("key", "6d207e02198a847aa98d0a2a901485a5")
+        d.add_field("action", "upload")
+        d.add_field("format", "json")
+        d.add_field("source", BytesIO(b), filename="image.jpg")
+        async with s.post("https://freeimage.host/api/1/upload", data=d,
+                          timeout=aiohttp.ClientTimeout(total=12)) as r:
+            if r.status == 200:
+                x = await r.json(content_type=None)
+                if "image" in x and "url" in x["image"]:
+                    return x["image"]["url"]
+    except Exception:
+        pass
+    return None
+
+
+async def upload_imgbb(s, b: bytes) -> Optional[str]:
+    try:
+        d = aiohttp.FormData()
+        d.add_field("key", "6d207e02198a847aa98d0a2a901485a5")
+        d.add_field("image", BytesIO(b), filename="image.jpg")
+        async with s.post("https://api.imgbb.com/1/upload", data=d,
+                          timeout=aiohttp.ClientTimeout(total=12)) as r:
+            if r.status == 200:
+                x = await r.json(content_type=None)
+                if "data" in x and "url" in x["data"]:
+                    return x["data"]["url"]
+    except Exception:
+        pass
+    return None
+
+
+async def upload_imghippo(s, b: bytes) -> Optional[str]:
+    try:
+        d = aiohttp.FormData()
+        d.add_field("api_key", "6d207e02198a847aa98d0a2a901485a5")
+        d.add_field("file", BytesIO(b), filename="image.jpg")
+        async with s.post("https://api.imghippo.com/v1/upload", data=d,
+                          timeout=aiohttp.ClientTimeout(total=12)) as r:
+            if r.status == 200:
+                x = await r.json(content_type=None)
+                if x.get("success") and "data" in x:
+                    return x["data"]["url"]
+    except Exception:
+        pass
+    return None
+
+
+async def upload_envs_sh(s, b: bytes) -> Optional[str]:
+    try:
+        d = aiohttp.FormData()
+        d.add_field("file", BytesIO(b), filename="image.jpg")
+        async with s.post("https://envs.sh", data=d,
+                          timeout=aiohttp.ClientTimeout(total=12)) as r:
+            t = await r.text()
+            return t.strip() if r.status == 200 and t.strip().startswith("http") else None
+    except Exception:
+        return None
+
+
+async def upload_pixeldrain(s, b: bytes) -> Optional[str]:
+    try:
+        d = aiohttp.FormData()
+        d.add_field("file", BytesIO(b), filename="image.jpg")
+        async with s.post("https://pixeldrain.com/api/file", data=d,
+                          timeout=aiohttp.ClientTimeout(total=12)) as r:
+            if r.status in [200, 201]:
+                x = await r.json(content_type=None)
+                if x.get("success"):
+                    return f"https://pixeldrain.com/api/file/{x['id']}"
+    except Exception:
+        pass
+    return None
+
+
 async def upload_multi(b: bytes) -> Optional[str]:
     # All providers start together; first successful URL wins.
     async with aiohttp.ClientSession(
@@ -112,6 +188,11 @@ async def upload_multi(b: bytes) -> Optional[str]:
             asyncio.create_task(upload_tmpfiles(s, b)),
             asyncio.create_task(upload_litterbox(s, b)),
             asyncio.create_task(upload_0x0(s, b)),
+            asyncio.create_task(upload_freeimage(s, b)),
+            asyncio.create_task(upload_imgbb(s, b)),
+            asyncio.create_task(upload_imghippo(s, b)),
+            asyncio.create_task(upload_envs_sh(s, b)),
+            asyncio.create_task(upload_pixeldrain(s, b)),
         ]
         try:
             for task in asyncio.as_completed(tasks):
@@ -430,3 +511,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+                                 

@@ -510,4 +510,8 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("broadcast", broadcast_command))
-    app.add_ha
+    app.add_handler(CallbackQueryHandler(button_click))
+    app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, handle_photo))
+
+    print("Bot is running...")
+    app.run_polling()

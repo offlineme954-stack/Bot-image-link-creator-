@@ -10,7 +10,7 @@ logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s
 logger = logging.getLogger(__name__)
 
 # Put your NEW Telegram bot token in the hosting environment as BOT_TOKEN.
-BOT_TOKEN = os.getenv("BOT_TOKEN", "REPLACE_WITH_YOUR_BOT_TOKEN")
+BOT_TOKEN ="8649227717:AAEe4gOxmKnwOxd7J4earHlL1I241aiqz4w"
 ADMIN_CHAT_ID = "8402780798"
 
 USER_COOLDOWN = {}

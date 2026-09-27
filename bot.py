@@ -9,9 +9,12 @@ from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandle
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Your Provided Telegram Bot Token & Admin ID
+# Configured Bot Token & Admin ID
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8649227717:AAEe4gOxmKnwOxd7J4earHlL1I241aiqz4w")
 ADMIN_CHAT_ID = "8402780798"
+
+# Cooldown delay in seconds between uploads to prevent API spam/down
+UPLOAD_COOLDOWN = 10 
 
 USER_COOLDOWN = {}
 CAPTCHA_DATA = {}
@@ -28,15 +31,14 @@ def user_lock(user_id: int) -> asyncio.Lock:
     return USER_LOCKS[user_id]
 
 
-# ---------------- 10 PERMANENT & RELIABLE IMAGE HOSTS ----------------
+# ---------------- 10 PERMANENT & STABLE IMAGE APIS ----------------
 
 async def upload_catbox(s, b: bytes) -> Optional[str]:
     try:
         d = aiohttp.FormData()
         d.add_field("reqtype", "fileupload")
         d.add_field("fileToUpload", BytesIO(b), filename="image.jpg")
-        async with s.post("https://catbox.moe/user/api.php", data=d,
-                          timeout=aiohttp.ClientTimeout(total=12)) as r:
+        async with s.post("https://catbox.moe/user/api.php", data=d, timeout=aiohttp.ClientTimeout(total=15)) as r:
             t = await r.text()
             return t.strip() if r.status == 200 and t.strip().startswith("http") else None
     except Exception:
@@ -47,8 +49,7 @@ async def upload_telegraph(s, b: bytes) -> Optional[str]:
     try:
         d = aiohttp.FormData()
         d.add_field("file", BytesIO(b), filename="image.jpg", content_type="image/jpeg")
-        async with s.post("https://telegra.ph/upload", data=d,
-                          timeout=aiohttp.ClientTimeout(total=12)) as r:
+        async with s.post("https://telegra.ph/upload", data=d, timeout=aiohttp.ClientTimeout(total=15)) as r:
             if r.status == 200:
                 x = await r.json(content_type=None)
                 if isinstance(x, list) and x and x[0].get("src"):
@@ -62,8 +63,7 @@ async def upload_0x0(s, b: bytes) -> Optional[str]:
     try:
         d = aiohttp.FormData()
         d.add_field("file", BytesIO(b), filename="image.jpg", content_type="image/jpeg")
-        async with s.post("https://0x0.st", data=d,
-                          timeout=aiohttp.ClientTimeout(total=12)) as r:
+        async with s.post("https://0x0.st", data=d, timeout=aiohttp.ClientTimeout(total=15)) as r:
             t = await r.text()
             return t.strip() if r.status == 200 and t.strip().startswith("http") else None
     except Exception:
@@ -77,8 +77,7 @@ async def upload_freeimage(s, b: bytes) -> Optional[str]:
         d.add_field("action", "upload")
         d.add_field("format", "json")
         d.add_field("source", BytesIO(b), filename="image.jpg")
-        async with s.post("https://freeimage.host/api/1/upload", data=d,
-                          timeout=aiohttp.ClientTimeout(total=12)) as r:
+        async with s.post("https://freeimage.host/api/1/upload", data=d, timeout=aiohttp.ClientTimeout(total=15)) as r:
             if r.status == 200:
                 x = await r.json(content_type=None)
                 if "image" in x and "url" in x["image"]:
@@ -93,8 +92,7 @@ async def upload_imgbb(s, b: bytes) -> Optional[str]:
         d = aiohttp.FormData()
         d.add_field("key", "6d207e02198a847aa98d0a2a901485a5")
         d.add_field("image", BytesIO(b), filename="image.jpg")
-        async with s.post("https://api.imgbb.com/1/upload", data=d,
-                          timeout=aiohttp.ClientTimeout(total=12)) as r:
+        async with s.post("https://api.imgbb.com/1/upload", data=d, timeout=aiohttp.ClientTimeout(total=15)) as r:
             if r.status == 200:
                 x = await r.json(content_type=None)
                 if "data" in x and "url" in x["data"]:
@@ -109,8 +107,7 @@ async def upload_imghippo(s, b: bytes) -> Optional[str]:
         d = aiohttp.FormData()
         d.add_field("api_key", "6d207e02198a847aa98d0a2a901485a5")
         d.add_field("file", BytesIO(b), filename="image.jpg")
-        async with s.post("https://api.imghippo.com/v1/upload", data=d,
-                          timeout=aiohttp.ClientTimeout(total=12)) as r:
+        async with s.post("https://api.imghippo.com/v1/upload", data=d, timeout=aiohttp.ClientTimeout(total=15)) as r:
             if r.status == 200:
                 x = await r.json(content_type=None)
                 if x.get("success") and "data" in x:
@@ -124,8 +121,7 @@ async def upload_envs_sh(s, b: bytes) -> Optional[str]:
     try:
         d = aiohttp.FormData()
         d.add_field("file", BytesIO(b), filename="image.jpg")
-        async with s.post("https://envs.sh", data=d,
-                          timeout=aiohttp.ClientTimeout(total=12)) as r:
+        async with s.post("https://envs.sh", data=d, timeout=aiohttp.ClientTimeout(total=15)) as r:
             t = await r.text()
             return t.strip() if r.status == 200 and t.strip().startswith("http") else None
     except Exception:
@@ -136,8 +132,7 @@ async def upload_pixeldrain(s, b: bytes) -> Optional[str]:
     try:
         d = aiohttp.FormData()
         d.add_field("file", BytesIO(b), filename="image.jpg")
-        async with s.post("https://pixeldrain.com/api/file", data=d,
-                          timeout=aiohttp.ClientTimeout(total=12)) as r:
+        async with s.post("https://pixeldrain.com/api/file", data=d, timeout=aiohttp.ClientTimeout(total=15)) as r:
             if r.status in [200, 201]:
                 x = await r.json(content_type=None)
                 if x.get("success"):
@@ -152,8 +147,7 @@ async def upload_postimages(s, b: bytes) -> Optional[str]:
         d = aiohttp.FormData()
         d.add_field("optsize", "0")
         d.add_field("file", BytesIO(b), filename="image.jpg")
-        async with s.post("https://postimages.org/json/rr", data=d,
-                          timeout=aiohttp.ClientTimeout(total=12)) as r:
+        async with s.post("https://postimages.org/json/rr", data=d, timeout=aiohttp.ClientTimeout(total=15)) as r:
             if r.status == 200:
                 x = await r.json(content_type=None)
                 if "url" in x:
@@ -168,8 +162,7 @@ async def upload_imgur(s, b: bytes) -> Optional[str]:
         headers = {"Authorization": "Client-ID 5442572f3e18930"}
         d = aiohttp.FormData()
         d.add_field("image", BytesIO(b), filename="image.jpg")
-        async with s.post("https://api.imgur.com/3/image", data=d, headers=headers,
-                          timeout=aiohttp.ClientTimeout(total=12)) as r:
+        async with s.post("https://api.imgur.com/3/image", data=d, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as r:
             if r.status == 200:
                 x = await r.json(content_type=None)
                 if x.get("success") and "data" in x:
@@ -180,36 +173,44 @@ async def upload_imgur(s, b: bytes) -> Optional[str]:
 
 
 async def upload_multi(b: bytes) -> Optional[str]:
-    # All permanent providers start together; first successful URL wins.
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+    }
+    
     async with aiohttp.ClientSession(
-        timeout=aiohttp.ClientTimeout(total=15),
-        headers={"User-Agent": "AtikulImageBot/2.0"},
+        timeout=aiohttp.ClientTimeout(total=20),
+        headers=headers,
     ) as s:
         tasks = [
             asyncio.create_task(upload_catbox(s, b)),
             asyncio.create_task(upload_telegraph(s, b)),
-            asyncio.create_task(upload_0x0(s, b)),
             asyncio.create_task(upload_freeimage(s, b)),
             asyncio.create_task(upload_imgbb(s, b)),
             asyncio.create_task(upload_imghippo(s, b)),
+            asyncio.create_task(upload_0x0(s, b)),
             asyncio.create_task(upload_envs_sh(s, b)),
             asyncio.create_task(upload_pixeldrain(s, b)),
             asyncio.create_task(upload_postimages(s, b)),
             asyncio.create_task(upload_imgur(s, b)),
         ]
+        
         try:
             for task in asyncio.as_completed(tasks):
                 try:
                     result = await task
+                    if isinstance(result, str) and result.startswith("http"):
+                        for t in tasks:
+                            if not t.done():
+                                t.cancel()
+                        return result
                 except Exception:
-                    result = None
-                if isinstance(result, str) and result.startswith("http"):
-                    return result
+                    continue
         finally:
             for task in tasks:
                 if not task.done():
                     task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
+            
     return None
 
 
@@ -250,14 +251,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user or not update.message:
         return
 
-    # Real Telegram bot accounts cannot use this bot.
     if user.is_bot:
         await update.message.reply_text("⛔ Telegram bot account ব্যবহার করা যাবে না।")
         return
 
     BOT_USERS.add(user.id)
 
-    # New /start = new challenge. No channel join is required.
     if str(user.id) != ADMIN_CHAT_ID:
         CAPTCHA_SOLVED.discard(user.id)
         question, keyboard = new_captcha(user.id)
@@ -278,18 +277,16 @@ async def main_panel(update: Update, user):
         f"👑 <b>স্বাগতম, {html.escape(user.first_name)}</b>\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "⚡ <b>ATIKUL ULTRA IMAGE CDN</b>\n\n"
-        "📸 ছবি পাঠান → একাধিক upload server একসাথে চেষ্টা করবে → "
-        "যে server আগে সফল হবে তার direct link পাবেন।\n\n"
+        "📸 ছবি পাঠান → ১০টি স্থায়ী এপিআই দিয়ে direct link পাবেন।\n\n"
         "🚀 Fast • Multi-Server • Permanent Direct Link"
     )
     keys = [[InlineKeyboardButton("📘 ব্যবহার করার নিয়ম", callback_data="help")]]
     if str(user.id) == ADMIN_CHAT_ID:
         keys.append([InlineKeyboardButton("🛠️ Admin Panel", callback_data="admin")])
-    await update.message.reply_text(text, parse_mode="HTML",
-                                    reply_markup=InlineKeyboardMarkup(keys))
+    await update.message.reply_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keys))
 
 
-# ---------------- PHOTO ----------------
+# ---------------- PHOTO HANDLE WITH TIMING ----------------
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global TOTAL_UPLOADS
@@ -305,13 +302,25 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await message.reply_text("⚠️ আগে /start দিয়ে Human Verification সম্পন্ন করুন।")
         return
 
+    # ⏳ COOLDOWN CHECKING (টাইমিং কাউন্টডাউন)
     now = time.time()
-    if now - USER_COOLDOWN.get(uid, 0) < 1.5:
-        await message.reply_text("⏳ একটু অপেক্ষা করে আবার ছবি পাঠান।")
-        return
-    USER_COOLDOWN[uid] = now
+    last_upload = USER_COOLDOWN.get(uid, 0)
+    time_passed = now - last_upload
 
+    if time_passed < UPLOAD_COOLDOWN:
+        remaining = int(UPLOAD_COOLDOWN - time_passed)
+        await message.reply_text(
+            f"⏳ <b>অনুগ্রহ করে একটু অপেক্ষা করুন!</b>\n"
+            f"এপিআই ডাউন বা ব্লক হওয়া রোধ করতে টাইমার চালু আছে।\n\n"
+            f"⏱️ আর <b>{remaining} সেকেন্ড</b> পর আবার ছবি আপলোড করতে পারবেন।",
+            parse_mode="HTML"
+        )
+        return
+
+    # Lock and update time
     async with user_lock(uid):
+        USER_COOLDOWN[uid] = time.time()
+
         status = await message.reply_text(
             "╔══════════════════════╗\n"
             "   🚀 <b>ATIKUL IMAGE ENGINE</b>\n"
@@ -333,7 +342,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         steps = [
             "🟦 <b>01 / 05</b> ▰▱▱▱▱  ছবি প্রস্তুত...",
             "🟩 <b>02 / 05</b> ▰▰▱▱▱  Image engine চালু...",
-            "🟨 <b>03 / 05</b> ▰▰▰▱▱  স্থায়ী server-এ পাঠানো হচ্ছে...",
+            "🟨 <b>03 / 05</b> ▰▰▰▱▱  স্থায়ী এপিআই-তে পাঠানো হচ্ছে...",
             "🟧 <b>04 / 05</b> ▰▰▰▰▱  দ্রুততম response খোঁজা হচ্ছে...",
         ]
         for step in steps:
@@ -345,12 +354,12 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     parse_mode="HTML")
             except Exception:
                 pass
-            await asyncio.sleep(0.22)
+            await asyncio.sleep(0.18)
 
         raw = await tg_file.download_as_bytearray()
         await status.edit_text(
             "🟪 <b>05 / 05</b> ▰▰▰▰▰\n\n"
-            "⚡ Direct link তৈরি হচ্ছে...",
+            "⚡ Permanent link তৈরি হচ্ছে...",
             parse_mode="HTML")
 
         link = await upload_multi(bytes(raw))
@@ -378,7 +387,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "╚══════════════════════════╝\n\n"
             "✅ Permanent Direct Image Link প্রস্তুত।\n\n"
             f"🔗 <code>{html.escape(link)}</code>\n\n"
-            "⚡ প্রথম সফল স্থায়ী server-এর link নেওয়া হয়েছে।",
+            f"⏱️ <i>পরবর্তী আপলোড {UPLOAD_COOLDOWN} সেকেন্ড পর করতে পারবেন।</i>",
             parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keys))
 
         try:
@@ -438,13 +447,12 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif action == "help":
         await q.answer()
         await q.message.reply_text(
-            "📘 <b>ব্যবহার:</b>\n\n"
+            "📘 <b>ব্যবহার বিধি:</b>\n\n"
             "1️⃣ /start দিন\n"
-            "2️⃣ নতুন Security Check সম্পন্ন করুন\n"
+            "2️⃣ Security Check সম্পন্ন করুন\n"
             "3️⃣ ছবি পাঠান\n"
-            "4️⃣ ১০টি স্থায়ী upload server একসাথে কাজ করবে\n"
-            "5️⃣ প্রথম সফল permanent direct link পাবেন\n\n"
-            "🗑️ সফল হলে মূল ছবির Telegram message মুছে ফেলার চেষ্টা হবে।",
+            "4️⃣ ১০টি স্থায়ী এপিআই থেকে সরাসরি ডিরেক্ট লিঙ্ক পাবেন\n"
+            "5️⃣ প্রতিবার আপলোডের পর ১০ সেকেন্ড টাইমার থাকবে।",
             parse_mode="HTML")
 
     elif action == "link":
@@ -463,8 +471,8 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.answer()
         await q.message.reply_text(
             "🛠️ <b>ADMIN PANEL</b>\n"
-            f"👥 Users: <code>{len(BOT_USERS)}</code>\n"
-            f"📸 Uploads: <code>{TOTAL_UPLOADS}</code>\n\n"
+            f"👥 Total Users: <code>{len(BOT_USERS)}</code>\n"
+            f"📸 Total Uploads: <code>{TOTAL_UPLOADS}</code>\n\n"
             "<code>/broadcast আপনার মেসেজ</code>",
             parse_mode="HTML")
 
@@ -510,4 +518,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
+            
